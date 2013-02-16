@@ -4,7 +4,7 @@
   <title><![CDATA[nduthoit]]></title>
   <link href="http://nduthoit.github.com/atom.xml" rel="self"/>
   <link href="http://nduthoit.github.com/"/>
-  <updated>2013-02-16T11:57:55-05:00</updated>
+  <updated>2013-02-16T13:47:47-05:00</updated>
   <id>http://nduthoit.github.com/</id>
   <author>
     <name><![CDATA[Nathan Duthoit]]></name>
@@ -18,9 +18,14 @@
     <link href="http://nduthoit.github.com/blog/2013/02/16/parallel-tasks-in-fabric-with-duplicated-hosts/"/>
     <updated>2013-02-16T11:08:00-05:00</updated>
     <id>http://nduthoit.github.com/blog/2013/02/16/parallel-tasks-in-fabric-with-duplicated-hosts</id>
-    <content type="html"><![CDATA[<h3>This is a sample blog page</h3>
+    <content type="html"><![CDATA[<p>At <a href="http://waveapps.com">Wave</a> we have started using <a href="http://fabfile.org">Fabric</a>&#8217;s <a href="http://docs.fabfile.org/en/latest/usage/parallel.html">parallel execution</a> of tasks to run our <a href="http://south.aeracode.org/">south</a> database migrations on all our sharded databases at the same time (instead of serially). To do so we connect to 4-5 worker or app servers and run the migrate command from there. Since we have more than 5 databases we need to run more than one command in parallel on a given server. To achieve that we need to disable <a href="http://docs.fabfile.org/en/latest/usage/execution.html#host-list-deduplication">host list deduplication</a> since our host list for the migrate task looks something like: <code>[app1, app2, wrkr1, wrkr2, app1, app2, wrkr1, wrkr2, app1, app2]</code>.</p>
 
-<figure class='code'> <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<p>This has led to an issue where, sometimes, a failure in one of the migrations would not abort the release (i.e. the current Fabric run) as expected. The (great) documentation of the <a href="http://docs.fabfile.org/en/latest/api/core/tasks.html#fabric.tasks.execute">execute task</a> led me to guess that Fabric keeps track of successes and failures on a host by host basis when running in parallel. So if a migration on <code>app1</code> fails but then another one succeeds after that, the failure would get overwritten by the success.</p>
+
+<p>I&#8217;ve put together a sample fabfile that helped me confirm that this is indeed the case:</p>
+
+<figure class='code'><figcaption><span>fabfile.py </span></figcaption>
+ <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
 <span class='line-number'>2</span>
 <span class='line-number'>3</span>
 <span class='line-number'>4</span>
@@ -91,7 +96,107 @@
 </span></code></pre></td></tr></table></div></figure>
 
 
-<p>And more info here</p>
+<p>If you run the task with two different hosts, as expected the failure on the one host aborts the fabric run (proof is that &#8220;WE DID NOT ABORT&#8221; does not get printed to the console).</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>(workdir)nduthoit@Nathans-MacBook-Pro:~/workdir/parallel_fabric$ fab test -H 87.78.87.119,87.78.87.118
+</span><span class='line'>[87.78.87.119] Executing task 'test'
+</span><span class='line'>['87.78.87.119', '87.78.87.118']
+</span><span class='line'>[87.78.87.119] Executing task 'sample_task'
+</span><span class='line'>[87.78.87.118] Executing task 'sample_task'
+</span><span class='line'>[87.78.87.118] run: sleep 5
+</span><span class='line'>[87.78.87.119] run: rmdir non_existent_directory
+</span><span class='line'>[87.78.87.119] out: 
+</span><span class='line'>
+</span><span class='line'>
+</span><span class='line'>Fatal error: run() received nonzero return code 1 while executing!
+</span><span class='line'>
+</span><span class='line'>Requested: rmdir non_existent_directory
+</span><span class='line'>Executed: /bin/bash -l -c "rmdir non_existent_directory"
+</span><span class='line'>
+</span><span class='line'>Aborting.
+</span><span class='line'>[87.78.87.118] out: 
+</span><span class='line'>
+</span><span class='line'>
+</span><span class='line'>Fatal error: One or more hosts failed while executing task 'sample_task'
+</span><span class='line'>
+</span><span class='line'>Aborting.</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Now if you run the task with the same host repeated twice, the failure on the one host says that it is aborting but the success of the second task (<code>sleep 5</code>) overwrites the failure and fabric continues running and &#8220;WE DID NOT ABORT&#8221; does get printed to the console.</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>(workdir)nduthoit@Nathans-MacBook-Pro:~/workdir/paralle_fabric$ fab test -H 87.78.87.119,87.78.87.119
+</span><span class='line'>[87.78.87.119] Executing task 'test'
+</span><span class='line'>['87.78.87.119', '87.78.87.119']
+</span><span class='line'>[87.78.87.119] Executing task 'sample_task'
+</span><span class='line'>[87.78.87.119] Executing task 'sample_task'
+</span><span class='line'>[87.78.87.119] run: sleep 5
+</span><span class='line'>[87.78.87.119] run: rmdir non_existent_directory
+</span><span class='line'>[87.78.87.119] out: rmdir: failed to remove `non_existent_directory': No such file or directory
+</span><span class='line'>[87.78.87.119] out: 
+</span><span class='line'>
+</span><span class='line'>
+</span><span class='line'>Fatal error: run() received nonzero return code 1 while executing!
+</span><span class='line'>
+</span><span class='line'>Requested: rmdir non_existent_directory
+</span><span class='line'>Executed: /bin/bash -l -c "rmdir non_existent_directory"
+</span><span class='line'>
+</span><span class='line'>Aborting.
+</span><span class='line'>[87.78.87.119] out: 
+</span><span class='line'>
+</span><span class='line'>WE DID NOT ABORT
+</span><span class='line'>
+</span><span class='line'>Done.</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>Workaround</h3>
+
+<p>I&#8217;ve checked with <a href="http://bitprophet.org">bitprophet</a> and this will be fixed in fab 2 with the new <a href="https://github.com/pyinvoke/invoke">Invoke library</a>.  Looking forward to giving it a try.</p>
+
+<p>In the meanwhile, the workaround for us is to use a shared dictionary (using <code>multiprocessing.Manager().dict()</code>) that is keyed on the database (since we only run one task per database) and is used to keep track of successes. That dictionary is passed to the fabric task that executes the <code>migrate</code> commands in parallel. Once all the parallel runs of the task have completed, we check that each run has recorded a success in the shared dictionary. If it&#8217;s not the case we abort the execution.</p>
 ]]></content>
   </entry>
   
