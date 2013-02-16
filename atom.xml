@@ -4,7 +4,7 @@
   <title><![CDATA[nduthoit]]></title>
   <link href="http://nduthoit.github.com/atom.xml" rel="self"/>
   <link href="http://nduthoit.github.com/"/>
-  <updated>2013-02-16T13:47:47-05:00</updated>
+  <updated>2013-02-16T14:00:31-05:00</updated>
   <id>http://nduthoit.github.com/</id>
   <author>
     <name><![CDATA[Nathan Duthoit]]></name>
@@ -18,11 +18,15 @@
     <link href="http://nduthoit.github.com/blog/2013/02/16/parallel-tasks-in-fabric-with-duplicated-hosts/"/>
     <updated>2013-02-16T11:08:00-05:00</updated>
     <id>http://nduthoit.github.com/blog/2013/02/16/parallel-tasks-in-fabric-with-duplicated-hosts</id>
-    <content type="html"><![CDATA[<p>At <a href="http://waveapps.com">Wave</a> we have started using <a href="http://fabfile.org">Fabric</a>&#8217;s <a href="http://docs.fabfile.org/en/latest/usage/parallel.html">parallel execution</a> of tasks to run our <a href="http://south.aeracode.org/">south</a> database migrations on all our sharded databases at the same time (instead of serially). To do so we connect to 4-5 worker or app servers and run the migrate command from there. Since we have more than 5 databases we need to run more than one command in parallel on a given server. To achieve that we need to disable <a href="http://docs.fabfile.org/en/latest/usage/execution.html#host-list-deduplication">host list deduplication</a> since our host list for the migrate task looks something like: <code>[app1, app2, wrkr1, wrkr2, app1, app2, wrkr1, wrkr2, app1, app2]</code>.</p>
+    <content type="html"><![CDATA[<h3>The problem</h3>
 
-<p>This has led to an issue where, sometimes, a failure in one of the migrations would not abort the release (i.e. the current Fabric run) as expected. The (great) documentation of the <a href="http://docs.fabfile.org/en/latest/api/core/tasks.html#fabric.tasks.execute">execute task</a> led me to guess that Fabric keeps track of successes and failures on a host by host basis when running in parallel. So if a migration on <code>app1</code> fails but then another one succeeds after that, the failure would get overwritten by the success.</p>
+<p>At <a href="http://waveapps.com">Wave</a> we have started using <a href="http://fabfile.org">Fabric</a>&#8217;s <a href="http://docs.fabfile.org/en/latest/usage/parallel.html">parallel execution</a> of tasks to run our <a href="http://south.aeracode.org/">south</a> database migrations on all our sharded databases at the same time (instead of serially). To do so we connect to 4-5 worker or app servers and run the migrate command from there. Since we have more than 5 databases we need to run more than one command in parallel on a given server. To achieve that we need to disable <a href="http://docs.fabfile.org/en/latest/usage/execution.html#host-list-deduplication">host list deduplication</a> since our host list for the migrate task looks something like: <code>[app1, app2, wrkr1, wrkr2, app1, app2, wrkr1, wrkr2, app1, app2]</code>.</p>
 
-<p>I&#8217;ve put together a sample fabfile that helped me confirm that this is indeed the case:</p>
+<p>This has led to an issue where, sometimes, a failure in one of the migrations would not abort the release (i.e. the current Fabric run) as expected. The (great) documentation of the <a href="http://docs.fabfile.org/en/latest/api/core/tasks.html#fabric.tasks.execute">execute task</a> led me to guess that Fabric keeps track of successes and failures on a host by host basis when running in parallel. So if a migration on <code>app1</code> fails but then another one on <code>app1</code> succeeds after that, the failure originally recorded for <code>app1</code> would get overwritten with a success.</p>
+
+<h3>Debugging</h3>
+
+<p>I put together a sample fabfile that confirms the issue:</p>
 
 <figure class='code'><figcaption><span>fabfile.py </span></figcaption>
  <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
@@ -96,7 +100,7 @@
 </span></code></pre></td></tr></table></div></figure>
 
 
-<p>If you run the task with two different hosts, as expected the failure on the one host aborts the fabric run (proof is that &#8220;WE DID NOT ABORT&#8221; does not get printed to the console).</p>
+<p>If you run the task with two different hosts, as expected, the failure on the one host aborts the fabric run (proof is that &#8220;WE DID NOT ABORT&#8221; does not get printed to the console).</p>
 
 <figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
 <span class='line-number'>2</span>
@@ -144,7 +148,7 @@
 </span><span class='line'>Aborting.</span></code></pre></td></tr></table></div></figure>
 
 
-<p>Now if you run the task with the same host repeated twice, the failure on the one host says that it is aborting but the success of the second task (<code>sleep 5</code>) overwrites the failure and fabric continues running and &#8220;WE DID NOT ABORT&#8221; does get printed to the console.</p>
+<p>Now, if you run the task with the same host repeated twice, the failure on the one host gets overwritten by the success of the first, slower, task (<code>sleep 5</code>), Fabric continues its execution and &#8220;WE DID NOT ABORT&#8221; does get printed to the console.</p>
 
 <figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
 <span class='line-number'>2</span>
@@ -197,6 +201,58 @@
 <p>I&#8217;ve checked with <a href="http://bitprophet.org">bitprophet</a> and this will be fixed in fab 2 with the new <a href="https://github.com/pyinvoke/invoke">Invoke library</a>.  Looking forward to giving it a try.</p>
 
 <p>In the meanwhile, the workaround for us is to use a shared dictionary (using <code>multiprocessing.Manager().dict()</code>) that is keyed on the database (since we only run one task per database) and is used to keep track of successes. That dictionary is passed to the fabric task that executes the <code>migrate</code> commands in parallel. Once all the parallel runs of the task have completed, we check that each run has recorded a success in the shared dictionary. If it&#8217;s not the case we abort the execution.</p>
+
+<p>Here&#8217;s a modified version of the <code>ParallelTaskResultsManager</code> that we use.</p>
+
+<figure class='code'> <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+</pre></td><td class='code'><pre><code class='python'><span class='line'><span class="k">class</span> <span class="nc">ParallelTaskResultsManager</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+</span><span class='line'>    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">database_list</span><span class="p">):</span>
+</span><span class='line'>        <span class="bp">self</span><span class="o">.</span><span class="n">manager</span> <span class="o">=</span> <span class="n">Manager</span><span class="p">()</span>
+</span><span class='line'>        <span class="c"># used to store the success/failure of the migrate command (initialized to failures)</span>
+</span><span class='line'>        <span class="bp">self</span><span class="o">.</span><span class="n">migrate_results</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">manager</span><span class="o">.</span><span class="n">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">database_list</span><span class="p">,</span> <span class="p">[</span><span class="bp">False</span><span class="p">]</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">database_list</span><span class="p">)))</span>
+</span><span class='line'>        <span class="bp">self</span><span class="o">.</span><span class="n">lock</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">manager</span><span class="o">.</span><span class="n">Lock</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">def</span> <span class="nf">record_success</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">database</span><span class="p">):</span>
+</span><span class='line'>        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">lock</span><span class="p">:</span>
+</span><span class='line'>            <span class="bp">self</span><span class="o">.</span><span class="n">migrate_results</span><span class="p">[</span><span class="n">database</span><span class="p">]</span> <span class="o">=</span> <span class="bp">True</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">def</span> <span class="nf">get_failures</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span><span class='line'>        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">lock</span><span class="p">:</span>
+</span><span class='line'>            <span class="k">return</span> <span class="p">[</span><span class="n">db</span> <span class="k">for</span> <span class="n">db</span><span class="p">,</span> <span class="n">success</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">migrate_results</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">success</span><span class="p">]</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Sample usage in a Fabric task:</p>
+
+<figure class='code'> <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='python'><span class='line'>    <span class="n">results_manager</span> <span class="o">=</span> <span class="n">ParallelTaskResultsManager</span><span class="p">(</span><span class="n">database_list</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">execute</span><span class="p">(</span><span class="n">migrate_shard</span><span class="p">,</span> <span class="n">results_manager</span><span class="o">=</span><span class="n">results_manager</span><span class="p">,</span> <span class="n">hosts</span><span class="o">=</span><span class="n">host_list</span><span class="p">)</span>
+</span><span class='line'>    <span class="c"># Check if all the databases were successfully migrated, if not, abort</span>
+</span><span class='line'>    <span class="n">failed_migrate</span> <span class="o">=</span> <span class="n">results_manager</span><span class="o">.</span><span class="n">get_failures</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">if</span> <span class="n">failed_migrate</span><span class="p">:</span>
+</span><span class='line'>        <span class="n">abort</span><span class="p">(</span><span class="s">&quot;Migration of the following shard(s) failed: {0}&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">failed_migrate</span><span class="p">))</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>In general, the idea is to find a unique identifier for each run and use that to keep track of success and failures.</p>
 ]]></content>
   </entry>
   
