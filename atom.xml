@@ -4,7 +4,7 @@
   <title><![CDATA[nduthoit]]></title>
   <link href="http://nduthoit.github.com/atom.xml" rel="self"/>
   <link href="http://nduthoit.github.com/"/>
-  <updated>2013-02-16T11:07:03-05:00</updated>
+  <updated>2013-02-16T11:09:52-05:00</updated>
   <id>http://nduthoit.github.com/</id>
   <author>
     <name><![CDATA[Nathan Duthoit]]></name>
@@ -12,5 +12,14 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Parallel tasks in Fabric with duplicated hosts]]></title>
+    <link href="http://nduthoit.github.com/blog/2013/02/16/parallel-tasks-in-fabric-with-duplicated-hosts/"/>
+    <updated>2013-02-16T11:08:00-05:00</updated>
+    <id>http://nduthoit.github.com/blog/2013/02/16/parallel-tasks-in-fabric-with-duplicated-hosts</id>
+    <content type="html"><![CDATA[<h1>This is a sample blog page</h1>
+]]></content>
+  </entry>
   
 </feed>
