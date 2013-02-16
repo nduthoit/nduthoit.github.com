@@ -277,7 +277,7 @@
 
 <p>I&#8217;ve checked with <a href="http://bitprophet.org">bitprophet</a> and this will be fixed in fab 2 with the new <a href="https://github.com/pyinvoke/invoke">Invoke library</a>.  Looking forward to giving it a try.</p>
 
-<p>Until then, the main idea for a workaround is to find a unique identifier for each run of the task that is executed in parallel and use that to keep track of success and failures.</p>
+<p>Until then, the main idea for a workaround is to find a unique identifier for each run of the task that is executed in parallel and use that to keep track of successes and failures.</p>
 
 <p>For us, the unique identifier is the database name. Here&#8217;s a modified version of the <code>ParallelTaskResultsManager</code> that we use:</p>
 
@@ -321,7 +321,7 @@
 <span class='line-number'>5</span>
 <span class='line-number'>6</span>
 </pre></td><td class='code'><pre><code class='python'><span class='line'>    <span class="n">results_manager</span> <span class="o">=</span> <span class="n">ParallelTaskResultsManager</span><span class="p">(</span><span class="n">database_list</span><span class="p">)</span>
-</span><span class='line'>    <span class="n">execute</span><span class="p">(</span><span class="n">migrate_shard</span><span class="p">,</span> <span class="n">results_manager</span><span class="o">=</span><span class="n">results_manager</span><span class="p">,</span> <span class="n">hosts</span><span class="o">=</span><span class="n">host_list</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">execute</span><span class="p">(</span><span class="n">migrate_shard</span><span class="p">,</span> <span class="n">db_list</span><span class="p">,</span> <span class="n">results_manager</span><span class="o">=</span><span class="n">results_manager</span><span class="p">,</span> <span class="n">hosts</span><span class="o">=</span><span class="n">host_list</span><span class="p">)</span>
 </span><span class='line'>    <span class="c"># Check if all the databases were successfully migrated, if not, abort</span>
 </span><span class='line'>    <span class="n">failed_migrate</span> <span class="o">=</span> <span class="n">results_manager</span><span class="o">.</span><span class="n">get_failures</span><span class="p">()</span>
 </span><span class='line'>    <span class="k">if</span> <span class="n">failed_migrate</span><span class="p">:</span>
