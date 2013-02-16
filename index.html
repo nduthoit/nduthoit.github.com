@@ -7,7 +7,7 @@
 	<meta name="author" content="Nathan Duthoit">
 
 	
-	<meta name="description" content="The problem At Wave we have started using Fabric&#8217;s parallel execution of tasks to run our south database migrations on all our sharded &hellip;">
+	<meta name="description" content="When running Fabric tasks in parallel with duplicated hosts, failures may not abort the execution of the next tasks as expected. The problem At Wave &hellip;">
 	
 	<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 
@@ -97,18 +97,20 @@
     <article class="post">
 	<h2 class="title">
 		
-		<a href="/blog/2013/02/16/parallel-tasks-in-fabric-with-duplicated-hosts/">
+		<a href="/blog/2013/02/16/detecting-failures-when-running-fabric-tasks-in-parallel-with-duplictated-hosts/">
 		
-			Parallel Tasks in Fabric With Duplicated Hosts</a>
+			Detecting Failures When Running Fabric Tasks in Parallel With Duplictated Hosts</a>
 	</h2>
 	<div class="entry-content">
-		<h3>The problem</h3>
+		<p>When running <a href="http://fabfile.org">Fabric</a> tasks in parallel with duplicated hosts, failures may not abort the execution of the next tasks as expected.</p>
 
-<p>At <a href="http://waveapps.com">Wave</a> we have started using <a href="http://fabfile.org">Fabric</a>&#8217;s <a href="http://docs.fabfile.org/en/latest/usage/parallel.html">parallel execution</a> of tasks to run our <a href="http://south.aeracode.org/">south</a> database migrations on all our sharded databases at the same time (instead of serially). To do so we connect to 4-5 worker or app servers and run the migrate command from there. Since we have more than 5 databases we need to run more than one command in parallel on a given server. To achieve that we need to disable <a href="http://docs.fabfile.org/en/latest/usage/execution.html#host-list-deduplication">host list deduplication</a> since our host list for the migrate task looks something like: <code>[app1, app2, wrkr1, wrkr2, app1, app2, wrkr1, wrkr2, app1, app2]</code>.</p>
+<h3>The problem</h3>
 
-<p>This has led to an issue where, sometimes, a failure in one of the migrations would not abort the release (i.e. the current Fabric run) as expected. The (great) documentation of the <a href="http://docs.fabfile.org/en/latest/api/core/tasks.html#fabric.tasks.execute">execute task</a> led me to guess that Fabric keeps track of successes and failures on a host by host basis when running in parallel. So if a migration on <code>app1</code> fails but then another one on <code>app1</code> succeeds after that, the failure originally recorded for <code>app1</code> would get overwritten with a success.</p>
+<p>At <a href="http://waveapps.com">Wave</a> we have started using <a href="http://fabfile.org">Fabric</a>&#8217;s <a href="http://docs.fabfile.org/en/latest/usage/parallel.html">parallel execution</a> of tasks to run our <a href="http://south.aeracode.org/">south</a> database migrations on all our sharded databases at the same time (instead of serially). To do so we connect to 4-5 worker or app servers and run the migrate command from there. Since we have more than 5 databases we need to run more than one command in parallel on a given server. To achieve that we need to disable <a href="http://docs.fabfile.org/en/latest/usage/execution.html#host-list-deduplication">host list deduplication</a> since our host list for the migrate task looks something like: <code>[app1, app2, wrkr1, wrkr2, app1, app2, wrkr1, wrkr2, app1, app2]</code>. This has led to an issue where, sometimes, a failure in one of the migrations would not abort the release (i.e. the current Fabric run) as expected.</p>
 
 <h3>Debugging</h3>
+
+<p>The (great) documentation of the <a href="http://docs.fabfile.org/en/latest/api/core/tasks.html#fabric.tasks.execute">execute task</a> led me to guess that Fabric keeps track of successes and failures on a host by host basis when running in parallel. So if a migration on <code>app1</code> fails but then another one on <code>app1</code> succeeds after that, the failure originally recorded for <code>app1</code> would get overwritten with a success.</p>
 
 <p>I put together a sample fabfile that confirms the issue:</p>
 
@@ -284,9 +286,9 @@
 
 <p>I&#8217;ve checked with <a href="http://bitprophet.org">bitprophet</a> and this will be fixed in fab 2 with the new <a href="https://github.com/pyinvoke/invoke">Invoke library</a>.  Looking forward to giving it a try.</p>
 
-<p>In the meanwhile, the workaround for us is to use a shared dictionary (using <code>multiprocessing.Manager().dict()</code>) that is keyed on the database (since we only run one task per database) and is used to keep track of successes. That dictionary is passed to the fabric task that executes the <code>migrate</code> commands in parallel. Once all the parallel runs of the task have completed, we check that each run has recorded a success in the shared dictionary. If it&#8217;s not the case we abort the execution.</p>
+<p>Until then, the main idea for a workaround is to find a unique identifier for each run of the task that is executed in parallel and use that to keep track of success and failures.</p>
 
-<p>Here&#8217;s a modified version of the <code>ParallelTaskResultsManager</code> that we use.</p>
+<p>For us, the unique identifier is the database name. Here&#8217;s a modified version of the <code>ParallelTaskResultsManager</code> that we use:</p>
 
 <figure class='code'> <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
 <span class='line-number'>2</span>
@@ -319,7 +321,7 @@
 </span></code></pre></td></tr></table></div></figure>
 
 
-<p>Sample usage in a Fabric task:</p>
+<p>And this is how we use it in the task that makes the call to execute the <code>migrate_shard</code> task in parallel:</p>
 
 <figure class='code'> <div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
 <span class='line-number'>2</span>
@@ -336,7 +338,7 @@
 </span></code></pre></td></tr></table></div></figure>
 
 
-<p>In general, the idea is to find a unique identifier for each run and use that to keep track of success and failures.</p>
+<p>Note: the last step of the <code>migrate_shard</code> task is to call <code>results_manager.record_success(database)</code></p>
 
 		
 		
@@ -356,12 +358,12 @@
   
 
 
-<time datetime="2013-02-16T11:08:00-05:00" pubdate data-updated="true">Feb 16<span>th</span>, 2013</time></div>
+<time datetime="2013-02-16T14:08:00-05:00" pubdate data-updated="true">Feb 16<span>th</span>, 2013</time></div>
 	<div class="tags">
 
 </div>
 	
-		<div class="comments"><a href="/blog/2013/02/16/parallel-tasks-in-fabric-with-duplicated-hosts//index.html#disqus_thread">Comments</a></div>
+		<div class="comments"><a href="/blog/2013/02/16/detecting-failures-when-running-fabric-tasks-in-parallel-with-duplictated-hosts//index.html#disqus_thread">Comments</a></div>
 	
 </div></article>
 
