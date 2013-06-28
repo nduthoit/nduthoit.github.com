@@ -4,11 +4,11 @@
   <title><![CDATA[nduthoit]]></title>
   <link href="http://nduthoit.github.com/atom.xml" rel="self"/>
   <link href="http://nduthoit.github.com/"/>
-  <updated>2013-06-27T21:39:55-04:00</updated>
+  <updated>2013-06-27T21:40:39-04:00</updated>
   <id>http://nduthoit.github.com/</id>
   <author>
     <name><![CDATA[Nathan Duthoit]]></name>
-    
+    <email><![CDATA[nathan.duthoit@gmail.com]]></email>
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
