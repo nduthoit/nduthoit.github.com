@@ -7,7 +7,7 @@
 	<meta name="author" content="Nathan Duthoit">
 
 	
-	<meta name="description" content="Feb 16th, 2013 Comments Detecting Failures When Running Fabric Tasks in Parallel With Duplictated Hosts When running Fabric tasks in parallel with &hellip;">
+	<meta name="description" content="Sep 3rd, 2013 devops, django Running Out-of-band Migrations Rationale At Wave we used to run migrations as part of the deploy. As the size of our &hellip;">
 	
 
   <!-- http://t.co/dKP3o1e -->
@@ -23,7 +23,10 @@
 	<!--[if lt IE 9]><script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script><![endif]-->
 	<script src="//ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min.js"></script>
 	<link href='http://fonts.googleapis.com/css?family=Open+Sans:400italic,400,700' rel='stylesheet' type='text/css'>
-	
+	<!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="http://fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="http://fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
 </head>
 
 
@@ -35,15 +38,21 @@
 	<script src="/javascripts/md5.js"></script>
 	<script type="text/javascript">
 		$(function(){
-			$('.profilepic').append("<img src='http://www.gravatar.com/avatar/" + MD5("nathan.duthoit@gmail.com") + "?s=160' alt='Profile Picture' style='width: 160px;' />");
+			$('.profilepic').append("<img src='http://www.gravatar.com/avatar/" + MD5("") + "?s=160' alt='Profile Picture' style='width: 160px;' />");
 		});
 	</script>
 </div>
+<hgroup>
+  <h1><a href="/">nduthoit</a></h1>
+  
+    <h2>nduthoit's blog</h2>
+  
+</hgroup>
 
 <p class="subtitle">nduthoit's blog</p>
-<nav id="main-nav"><ul class="main">
-	<li><a href="/">Blog</a></li>
-	<li><a href="/blog/archives">Archives</a></li>
+<nav id="main-nav"><ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
 </ul>
 
 </nav>
@@ -51,13 +60,7 @@
 	<div class="social">
 		
 		
-		<a class="google" href="https://plus.google.com/100992180493822571537" rel="author" title="Google+">Google+</a>
 		
-		
-		<a class="twitter" href="http://twitter.com/nduthoit" title="Twitter">Twitter</a>
-		
-		
-		<a class="github" href="https://github.com/nduthoit" title="GitHub">GitHub</a>
 		
 		
 		
@@ -76,20 +79,6 @@
 		<div class="mid-col">
 			
 				
-<div id="banner" class="inner">
-	<div class="container">
-		<ul class="feed"></ul>
-	</div>
-	<small><a href="http://twitter.com/nduthoit">nduthoit</a> @ <a href="http://twitter.com">Twitter</a></small>
-	<div class="loading">Loading...</div>
-</div>
-<script src="/javascripts/twitter.js"></script>
-<script type="text/javascript">
-	(function($){
-		$('#banner').getTwitterFeed('nduthoit', 4, false);
-	})(jQuery);
-</script>
-
 			
 			<div class="mid-col-container">
 				<div id="content" class="inner">
@@ -110,12 +99,274 @@
   
 
 
+<time datetime="2013-09-03T16:44:00-04:00" data-updated="true" itemprop="datePublished">Sep 3<span>rd</span>, 2013</time></div>
+		<div class="tags">
+
+
+	<a class='category' href='/blog/categories/devops/'>devops</a>, <a class='category' href='/blog/categories/django/'>django</a>
+
+
+</div>
+		
+	</div>
+	<h1 class="title" itemprop="name"><a href="/blog/2013/09/03/running-out-of-band-migrations/" itemprop="url">Running Out-of-band Migrations</a></h1>
+	<div class="entry-content" itemprop="articleBody">
+		<h2>Rationale</h2>
+
+<p>At <a href="http://waveapps.com">Wave</a> we used to run migrations as part of the deploy. As the size of our user base and databases grows this is becoming more and more of an issue. Migrations that would run really fast on your local machine could lock a table on the production db potentially rendering the app unusable. Since we do rolling deploys, even if the migration is fast and non-locking, it is possible that an app server will be running an old version of the code and that the db has been migrated already (or vice-versa).</p>
+
+<p>To remedy these issues we have to decouple our migrations from our code deploys (out-of-band migrations) and sometimes use pt-online-schema-change (or a similar tool) to run some migrations.</p>
+
+<h2>General guidelines</h2>
+
+<ul>
+<li>Always test your migrations against a production-size database. This should give you a general idea of how long the migration will take against our production dbs. Keep in mind that a staging environment can probably not replicate production app usage and, unfortunately, it can make a big difference.</li>
+<li>Run heavy migrations during low-usage periods. That is true even if you&#8217;re using a tool like <a href="http://www.percona.com/doc/percona-toolkit/2.2/pt-online-schema-change.html">pt-online-schema-change</a> as it still needs to acquire locks for some of its actions and could be competing with app or worker processes for those locks.</li>
+</ul>
+
+
+<h2>Migration scenarios</h2>
+
+<p>We&#8217;ll cover different general scenarios that you might encounter and see how to implement a proper solution for each of them. Unfortunately, it is not feasible to cover every possible scenarios but hopefully the following ones should give you an idea of the techniques to use to implement your own scenario. If you feel that a scenario is not properly covered and should be added to this list, please leave a comment to let me know.</p>
+
+<p>You&#8217;ll often need multiple branches to achieve the intended result. In these scenarios, each branch is assumed to originate from the previous one and is meant to be deployed separately. For each scenario there will be a &#8216;Code&#8217; section - describing the different branches and their content and a &#8216;Deploying and migrating&#8217; - describing the steps to be taken to deploy and run migrations.</p>
+
+<p>Note that you don&#8217;t have to wait for all the code to be ready to start deploying. For example, in scenario A, you could run the &#8216;Deploying and migrating&#8217; steps 1-3 as soon as branchA is ready and is in its final state (keeping in mind that, more often than not, the content of your models tends to change as you write the code that uses them)</p>
+
+<p>Note: For these scenarios we&#8217;ll assume that the migrations steps are quick enough and/or don&#8217;t lock the table and can therefore be ran using south. We&#8217;ll cover what to do when that is not the case in the next section.</p>
+
+<h3>A. Creating a new model</h3>
+
+<h4>Code</h4>
+
+<ul>
+<li>branchA (from master):
+
+<ul>
+<li>Add the new model</li>
+<li>Assume the model does not exist: there should be no live code (that could be hit when a request or celery task comes in) that uses the new model.</li>
+<li>Create the schema migration with south (migrationOne)</li>
+<li>(optional) Create the data migration that populates instances of the new model (migrationTwo)</li>
+</ul>
+</li>
+<li>branchB (from branchA):
+
+<ul>
+<li>Add the code that uses the new model</li>
+</ul>
+</li>
+</ul>
+
+
+<h4>Deploying and migrating</h4>
+
+<ol>
+<li>Merge branchA into master and deploy master</li>
+<li>Run migrationOne</li>
+<li>Run migrationTwo</li>
+<li>Merge branchB into master and deploy master</li>
+</ol>
+
+
+<h3>B. Adding a field to an existing model</h3>
+
+<p>We&#8217;re assuming you&#8217;re adding a field that should not be blank and that should be populated for existing instances of the model.
+You have to start by making the field either nullable or have a default value. This is required because until step 4 has run, the app is not aware of the new field and will not provide any value for the new field to the DBMS when creating or updating instances. The DBMS will error-out unless it&#8217;s been given a default value for the new column. See scenario F on how to add the not-null constraint</p>
+
+<h4>Code</h4>
+
+<ul>
+<li>branchA (from master):
+
+<ul>
+<li>Add the new field: either make it nullable or set a default value</li>
+<li>Assume the field does not exist: there should be no live code (that could be hit when a request or celery task comes in) that uses the new model.</li>
+<li>Create the schema migration with South (migrationOne)</li>
+<li>Comment out the new field in the model definition (until migrationOne is ran, the field will not exist in the db; if the field is not commented out in the model definition, Django will request it in SELECT queries and the DBMS will return an error)</li>
+</ul>
+</li>
+<li>branchB (from branchA):
+
+<ul>
+<li>Un-comment the new field</li>
+<li>Create the data migration that populates the new field (migrationTwo)</li>
+<li>Add the code that populates the new field (WRITE)</li>
+<li>There should be still no code that depends on the field being populated</li>
+</ul>
+</li>
+<li>branchC (from branchB):
+
+<ul>
+<li>Add code that depends on the field being populated (READ)</li>
+</ul>
+</li>
+</ul>
+
+
+<h4>Deploying and migrating</h4>
+
+<ol>
+<li>Merge branchA into master and deploy master</li>
+<li>Run migrationOne (from this point forward, new instance will have the new field with the default value)</li>
+<li>Merge branchB into master and deploy master (from this point forward, new instances will have the new field populated with the proper value)</li>
+<li>Run migrationTwo (at this point all instances have a proper value for the new field)</li>
+<li>Merge branchC into master and deploy master</li>
+</ol>
+
+
+<h3>C. Removing a field from an existing model</h3>
+
+<p>We&#8217;re assuming that you&#8217;re removing a non-nullable field (it is easier to do if the field is nullable)</p>
+
+<h4>Code</h4>
+
+<ul>
+<li>branchA (from master):
+
+<ul>
+<li>Change the field definition to make it nullable</li>
+<li>Create the schema migration with South (migrationOne)</li>
+</ul>
+</li>
+<li>branchB (from branchA):
+
+<ul>
+<li>Remove the field from the model definition</li>
+<li>Create the schema migration (migrationTwo)</li>
+<li>Refactor the code assuming the field does not exist</li>
+</ul>
+</li>
+</ul>
+
+
+<h4>Deploying and migrating</h4>
+
+<ol>
+<li>Merge branchA into master and deploy master</li>
+<li>Run migrationOne (from this point forward, new instances can be created without specifying a value for the field)</li>
+<li>Merge branchB into master and deploy master (from this point forward, new instances will have the field set to null by the DBMS)</li>
+<li>Run migrationTwo</li>
+</ol>
+
+
+<h3>D. Changing a field on an existing model</h3>
+
+<p>It depends on the change you&#8217;re making to the field. There are two general use cases:</p>
+
+<h4>The new version of the field is less restrictive than the previous one</h4>
+
+<p>An example would be changing a CharField to a TextField: any valid value for the CharField is also a valid value for the TextField.</p>
+
+<h5>Code</h5>
+
+<ul>
+<li>branchA:
+
+<ul>
+<li>Change the field from CharField to TextField</li>
+<li>Create the schema migration (migrationOne)</li>
+<li>Undo the changes to the field (since, until the migration has run, the db still expects values from the old version of the field)</li>
+<li>There should be still no code that depends on the field being modified</li>
+</ul>
+</li>
+<li>branchB (from branchA):
+
+<ul>
+<li>Redo the changes to the field</li>
+<li>Add code that depends on the field being modified</li>
+</ul>
+</li>
+</ul>
+
+
+<h5>Deploying and migrating</h5>
+
+<ol>
+<li>Merge branchA into master and deploy master</li>
+<li>Run migrationOne (from this point forward, the DBMS is ready to accept values of the new type)</li>
+<li>Merge branchB into master and deploy master (from this point forward, new instances will have the field set to null by the DBMS)</li>
+</ol>
+
+
+<h4>The new version of the field is more restrictive or completely different than the previous one</h4>
+
+<p>You have to break it into two steps: adding the new version of the field as a new field (scenario B) and then removing the existing field (scenario C)</p>
+
+<h3>E. Adding an index to an existing field</h3>
+
+<h4>Code</h4>
+
+<ul>
+<li>branchA:
+
+<ul>
+<li>Add the index to the field</li>
+<li>Create the schema migration (migrationOne)</li>
+</ul>
+</li>
+</ul>
+
+
+<h4>Deploying and migrating</h4>
+
+<ol>
+<li>Merge branchA into master and deploy master</li>
+<li>Run migrationOne</li>
+</ol>
+
+
+<h3>F. Making a nullable field not-nullable</h3>
+
+<p>We&#8217;re assuming that you can guarantee that all the instances of the model have the field set.</p>
+
+<h4>Code</h4>
+
+<ul>
+<li>branchA:
+
+<ul>
+<li>Make the field not-nullable</li>
+<li>Create the schema migration (migrationOne)</li>
+</ul>
+</li>
+</ul>
+
+
+<h4>Deploying and migrating</h4>
+
+<ol>
+<li>Merge branchA into master and deploy master</li>
+<li>Run migrationOne</li>
+</ol>
+
+
+<p>Hope this helps :)</p>
+
+		
+		
+	</div>
+
+</article>
+
+
+    <article class="post" itemprop="blogPost" itemscope itemtype="http://schema.org/BlogPosting">
+	<div class="meta">
+		<div class="date">
+
+
+
+
+
+
+
+
+  
+
+
 <time datetime="2013-02-16T14:08:00-05:00" data-updated="true" itemprop="datePublished">Feb 16<span>th</span>, 2013</time></div>
 		<div class="tags">
 
 </div>
-		
-			<span class="comments"><a href="/blog/2013/02/16/detecting-failures-when-running-fabric-tasks-in-parallel-with-duplictated-hosts/#disqus_thread">Comments</a></span>
 		
 	</div>
 	<h1 class="title" itemprop="name"><a href="/blog/2013/02/16/detecting-failures-when-running-fabric-tasks-in-parallel-with-duplictated-hosts/" itemprop="url">Detecting Failures When Running Fabric Tasks in Parallel With Duplictated Hosts</a></h1>
@@ -377,10 +628,10 @@
     <div class="center"><a href="/blog/archives">Blog Archives</a></div>
 </nav></div>
 			</div>
-			<footer id="footer" class="inner">Copyright &copy; 2013
-
-    Nathan Duthoit
-
+			<footer id="footer" class="inner"><p>
+  Copyright &copy; 2013 - Nathan Duthoit -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
 
 Design credit: <a href="http://shashankmehta.in/archive/2012/greyshade.html">Shashank Mehta</a></footer>
 			<script src="/javascripts/slash.js"></script>
@@ -392,18 +643,6 @@ Design credit: <a href="http://shashankmehta.in/archive/2012/greyshade.html">Sha
 </script> <!-- Delete or comment this line to disable Fancybox -->
 
 
-<script type="text/javascript">
-      var disqus_shortname = 'nduthoit';
-      
-        
-        var disqus_script = 'count.js';
-      
-    (function () {
-      var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
-      dsq.src = 'http://' + disqus_shortname + '.disqus.com/' + disqus_script;
-      (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
-    }());
-</script>
 
 
 
